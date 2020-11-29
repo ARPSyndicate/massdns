@@ -112,53 +112,60 @@ static const char* stats_fmt_ansi = "\033[H\033[2J" // Clear screen (probably si
         "FORMERR:  | %12zu (%6.2f%%) | %12zu (%6.2f%%)\n";
 
 /* Optional real-time status output, all stats on a single line as valid JSON */
-static const char* stats_fmt_json = 
+static const char* stats_fmt_json =
     "{"
-        "\"processed_queries\": %zu,"
-        "\"received_packets\": %zu, "
+        "\"processed_queries\":%zu,"
+        "\"received_packets\":%zu,"
         "\"progress\":"
         "{"
-            "\"percent\": \"%.2f%%\"" ","
-            "\"eta\":" "{"
-                "\"hours\": %lld, \"minutes\": %lld, \"seconds\": %lld, \"total_hours\": %lld, \"total_minutes\": %lld, \"total_seconds\": %lld"
+            "\"percent\":%.2f,"
+            "\"eta\":{"
+                "\"hours\":%lld,"
+                "\"minutes\":%lld,"
+                "\"seconds\":%lld,"
+                "\"total_hours\":%lld,"
+                "\"total_minutes\":%lld,"
+                "\"total_seconds\":%lld"
             "}"
         "},"
-        "\"incoming_pps\": %zu, "
-        "\"average_incoming_pps\": %zu, "
-        "\"success_rate_pps\": %zu, \"average_success_rate_pps\": %zu, "
-        "\"finished_total\": %zu, "
-        "\"success_total\": %zu, "
-        "\"success_total_percent\": \"%.2f%%\", "
-        "\"mismatched_domains\": %zu,"
-        "\"mismatched_domains_pct\": \"%.2f%%\","
-        "\"IDs\": %zu, \"IDs pct\": \"%.2f%%\","
-        "\"failures\": \"%s\","
-        "\"response\": {"
-        "\"OK\": {"
-            "\"success_number\": %12zu,"
-            "\"success_pct\": \"%6.2f%%\","
-            "\"total_number\": %12zu,"
-            "\"total_pct\": \"%6.2f%%\"},"
-        "\"NXDOMAIN\": { "
-            "\"success_number\": %12zu,"
-            "\"success_pct\": \"%6.2f%%\","
-            "\"total_number\": %12zu,"
-            "\"total_pct\": \"%6.2f%%\"},"
-        "\"SERVFAIL\": {"
-            "\"success_number\": %zu,"
-            "\"success_pct\": \"%6.2f%%\","
-            "\"total_number\": %zu, "
-            "\"total_pct\": \"%6.2f%%\"},"             
-        "\"REFUSED\": { "
-            "\"success_number\": %12zu,"
-            "\"success_pct\": \"%6.2f%%\","
-            "\"total_number\": %zu,"
-            "\"total_pct\": \"%6.2f%%\"},"
-        "\"FORMERR\": {"
-            "\"success_number\": %zu,"
-            "\"success_pct\": \"%6.2f%%\","
-            "\"total_number\": %zu,"
-            "\"total_pct\": \"%6.2f%%\"}"
+        "\"incoming_pps\":%zu,"
+        "\"average_incoming_pps\":%zu,"
+        "\"success_rate_pps\":%zu,"
+        "\"average_success_rate_pps\":%zu,"
+        "\"finished_total\":%zu,"
+        "\"success_total\":%zu,"
+        "\"success_total_pct\":%.2f,"
+        "\"mismatched_domains\":%zu,"
+        "\"mismatched_domains_pct\":%.2f,"
+        "\"ids\":%zu,"
+        "\"ids_pct\":%.2f,"
+        "\"failures\":\"%s\","
+        "\"response\":{"
+        "\"OK\":{"
+            "\"success_number\":%zu,"
+            "\"success_pct\":%.2f,"
+            "\"total_number\":%zu,"
+            "\"total_pct\":%.2f},"
+        "\"NXDOMAIN\":{"
+            "\"success_number\":%zu,"
+            "\"success_pct\":%.2f,"
+            "\"total_number\":%zu,"
+            "\"total_pct\":%.2f},"
+        "\"SERVFAIL\":{"
+            "\"success_number\":%zu,"
+            "\"success_pct\":%.2f,"
+            "\"total_number\":%zu, "
+            "\"total_pct\":%.2f},"
+        "\"REFUSED\":{ "
+            "\"success_number\":%zu,"
+            "\"success_pct\":%.2f,"
+            "\"total_number\":%zu,"
+            "\"total_pct\":%.2f},"
+        "\"FORMERR\":{"
+            "\"success_number\":%zu,"
+            "\"success_pct\":%.2f,"
+            "\"total_number\":%zu,"
+            "\"total_pct\":%.2f}"
         "}"
     "}\n";
 
@@ -543,11 +550,15 @@ lookup_t *new_lookup(const char *qname, dns_record_type type, bool *new)
     lookup_entry_t *entry = ((lookup_entry_t**)context.lookup_pool.data)[--context.lookup_pool.len];
     lookup_key_t *key = &entry->key;
 
-    key->name.length = (uint8_t)string_copy((char*)key->name.name, qname, sizeof(key->name.name));
-    if(key->name.name[key->name.length - 1] != '.')
+    ssize_t name_length = dns_str2namebuf(qname, key->name.name);
+    if(name_length < 0)
     {
-        key->name.name[key->name.length] = '.';
-        key->name.name[++key->name.length] = 0;
+        key->name.length = 1;
+        key->name.name[0] = 0;
+    }
+    else
+    {
+        key->name.length = name_length;
     }
 
     key->type = type;
@@ -620,11 +631,11 @@ void send_query(lookup_t *lookup)
         lookup->socket = (socket_info_t *) interfaces->data + socket_index;
     }
 
-    ssize_t result = dns_question_create(query_buffer, (char*)lookup->key->name.name, lookup->key->type,
+    ssize_t result = dns_question_create_from_name(query_buffer, &lookup->key->name, lookup->key->type,
                                                    lookup->transaction);
     if (result < DNS_PACKET_MINIMUM_SIZE)
     {
-        log_msg("Failed to create DNS question for query \"%s\".", lookup->key->name.name);
+        log_msg("Failed to create DNS question for query \"%s\".", dns_name2str(&lookup->key->name));
         return;
     }
 
@@ -921,7 +932,7 @@ bool is_unacceptable(dns_pkt_t *packet)
 void write_exhausted_tries(lookup_t *lookup, char *status)
 {
     if(context.cmd_args.output == OUTPUT_NDJSON && context.format.write_exhausted_tries) {
-        json_escape(json_buffer, sizeof(json_buffer), lookup->key->name.name, lookup->key->name.length);
+        json_escape_str(json_buffer, sizeof(json_buffer), dns_name2str(&lookup->key->name));
         fprintf(context.outfile,
                 "{\"name\":\"%s\",\"type\":\"%s\",\"class\":\"%s\",\"error\":\"%s\"}\n", json_buffer,
                 dns_record_type2str(lookup->key->type), "IN", status);
@@ -1084,7 +1095,7 @@ void do_read(uint8_t *offset, size_t len, struct sockaddr_storage *recvaddr)
                 break;
 
             case OUTPUT_NDJSON: // Only print records from answer section that match the query name (in ndjson)
-                json_escape(json_buffer, sizeof(json_buffer), packet.head.question.name.name, packet.head.question.name.length);
+                json_escape_str(json_buffer, sizeof(json_buffer), dns_name2str(&packet.head.question.name));
                 fprintf(context.outfile,
                         "{\"name\":\"%s\",\"type\":\"%s\",\"class\":\"%s\",\"status\":\"%s\",\"data\":{",
                         json_buffer,
@@ -1113,7 +1124,7 @@ void do_read(uint8_t *offset, size_t len, struct sockaddr_storage *recvaddr)
                     {
                         fputs(",", context.outfile);
                     }
-                    json_escape(json_buffer, sizeof(json_buffer), rec.name.name, rec.name.length);
+                    json_escape_str(json_buffer, sizeof(json_buffer), dns_name2str(&rec.name));
 
                     fprintf(context.outfile,
                             "{\"ttl\":%" PRIu32 ",\"type\":\"%s\",\"class\":\"%s\",\"name\":\"%s\",\"data\":\"",
@@ -1297,7 +1308,6 @@ void can_read(socket_info_t *info)
 bool cmp_lookup(void *lookup1, void *lookup2)
 {
     return dns_names_eq(&((lookup_key_t *) lookup1)->name, &((lookup_key_t *) lookup2)->name);
-    //return strcasecmp(((lookup_key_t *) lookup1)->domain,((lookup_key_t *) lookup2)->domain) == 0;
 }
 
 void binfile_write_head()
